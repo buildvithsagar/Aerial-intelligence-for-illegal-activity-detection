@@ -5,36 +5,26 @@ import numpy as np
 import time
 import os
 import json
+import urllib.error
+import urllib.request
+from collections import deque
+from ultralytics import YOLO
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, 
                             QFileDialog, QHBoxLayout, QCheckBox, QGroupBox, QFormLayout, 
-                            QButtonGroup, QRadioButton, QFrame, QLineEdit, QInputDialog, QMessageBox, QDialog, QComboBox, QDialogButtonBox)
+                            QLineEdit, QMessageBox, QDialog, QComboBox, QDialogButtonBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QPoint, QRect
 from PyQt5.QtGui import QImage, QPixmap, QFont, QCursor, QPainter, QPen
 from PyQt5.QtWebEngineWidgets import QWebEngineView
-from ultralytics import YOLO
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import datetime
 
-COCO_CLASSES = [
-    'person', 'bicycle', 'car', 'motorbike', 'aeroplane', 'bus', 'train', 'truck',
-    'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
-    'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra',
-    'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-    'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
-    'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup',
-    'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange',
-    'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'sofa',
-    'potted plant', 'bed', 'dining table', 'toilet', 'tv monitor', 'laptop', 'mouse',
-    'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
-    'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
-    'toothbrush'
-]
+PERSON_CLASS_ID = 0
 
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray, np.ndarray, np.ndarray, int, float, float, bool, float, int)
 
-    def __init__(self, video_path, conf_thresh=0.10, iou_thresh=0.6, max_people=350, overcrowd_thresh=80.0, light_mode=False, zones=[], zone_counting_enabled=False):
+    def __init__(self, video_path, conf_thresh=0.10, iou_thresh=0.6, max_people=350, overcrowd_thresh=80.0, light_mode=False, zones=None, zone_counting_enabled=False):
         super().__init__()
         self.video_path = video_path
         self.conf_thresh = conf_thresh
@@ -42,13 +32,13 @@ class VideoThread(QThread):
         self.max_people = max_people
         self.overcrowd_thresh = overcrowd_thresh
         self._run_flag = True
-        self.model = YOLO('yolov8n.pt')
+        self.model = YOLO('weight.pt')
         self.heatmap = None
         self.heatmap_decay = 0.95
         self.peak_density = 0.0
         self.alerts_triggered = 0
         self.light_mode = light_mode
-        self.zones = zones
+        self.zones = zones or []
         self.zone_counting_enabled = zone_counting_enabled
 
     def run(self):
@@ -76,56 +66,59 @@ class VideoThread(QThread):
 
             # Resize for light mode
             input_frame = cv2.resize(frame, (model_size, model_size)) if self.light_mode else frame
-            results = self.model(input_frame, conf=self.conf_thresh, iou=self.iou_thresh)
+            results = self.model(input_frame, conf=self.conf_thresh, iou=self.iou_thresh, verbose=False)
             
             # Map boxes back if resized
             scale_x = frame.shape[1] / model_size if self.light_mode else 1.0
             scale_y = frame.shape[0] / model_size if self.light_mode else 1.0
-            
-            boxes = results[0].boxes.xyxy.cpu().numpy()
-            if self.light_mode:
-                boxes[:, [0, 2]] *= scale_x
-                boxes[:, [1, 3]] *= scale_y
-                
-            class_ids = results[0].boxes.cls.cpu().numpy().astype(int)
-            confidences = results[0].boxes.conf.cpu().numpy()
+
+            result_boxes = results[0].boxes
+            if result_boxes is None or len(result_boxes) == 0:
+                boxes = np.empty((0, 4), dtype=np.float32)
+                class_ids = np.empty((0,), dtype=np.int32)
+                confidences = np.empty((0,), dtype=np.float32)
+            else:
+                boxes = result_boxes.xyxy.cpu().numpy()
+                if self.light_mode and boxes.size:
+                    boxes[:, [0, 2]] *= scale_x
+                    boxes[:, [1, 3]] *= scale_y
+                class_ids = result_boxes.cls.cpu().numpy().astype(np.int32)
+                confidences = result_boxes.conf.cpu().numpy()
+
+            person_indices = np.flatnonzero((class_ids == PERSON_CLASS_ID) & (confidences > self.conf_thresh))
             
             # Create detection frame with bounding boxes
             detection_frame = frame.copy()
 
             # --- Zone-based counting logic ---
             people_in_zones = 0
-            all_people_count = 0
+            all_people_count = int(person_indices.size)
             
             # Update heatmap based on ALL people for a complete thermal view
-            for i, class_id in enumerate(class_ids):
-                if COCO_CLASSES[class_id] == 'person' and confidences[i] > self.conf_thresh:
-                    x1, y1, x2, y2 = map(int, boxes[i])
-                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                    cv2.circle(self.heatmap, (cx, cy), 20, 1, -1)
+            frame_h, frame_w = frame.shape[:2]
+            for i in person_indices:
+                x1, y1, x2, y2 = map(int, boxes[i])
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                cx = max(0, min(cx, frame_w - 1))
+                cy = max(0, min(cy, frame_h - 1))
+                cv2.circle(self.heatmap, (cx, cy), 20, 1, -1)
 
-            for i, class_id in enumerate(class_ids):
-                if COCO_CLASSES[class_id] == 'person' and confidences[i] > self.conf_thresh:
-                    all_people_count += 1
-                    x1, y1, x2, y2 = map(int, boxes[i])
-                    
-                    foot_point = ((x1 + x2) // 2, y2)
-                    
-                    in_zone = False
-                    if self.zone_counting_enabled and self.zones:
-                        for z in self.zones:
-                            if z[0] < foot_point[0] < z[2] and z[1] < foot_point[1] < z[3]:
-                                in_zone = True
-                                break
-                    else:
-                        in_zone = True # If zone counting disabled, count all people
+                foot_point = ((x1 + x2) // 2, y2)
 
-                    if in_zone:
-                        people_in_zones += 1
-                        # Draw bounding boxes on detection frame only for people in zones (or all if disabled)
-                        cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        label = f"Person: {confidences[i]:.2f}"
-                        cv2.putText(detection_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                in_zone = False
+                if self.zone_counting_enabled and self.zones:
+                    for z in self.zones:
+                        if z[0] < foot_point[0] < z[2] and z[1] < foot_point[1] < z[3]:
+                            in_zone = True
+                            break
+                else:
+                    in_zone = True  # If zone counting disabled, count all people
+
+                if in_zone:
+                    people_in_zones += 1
+                    cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = f"Person: {confidences[i]:.2f}"
+                    cv2.putText(detection_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             current_people_count = people_in_zones if self.zone_counting_enabled and self.zones else all_people_count
             crowd_percentage = (current_people_count / self.max_people) * 100 if self.max_people > 0 else 0
@@ -151,9 +144,10 @@ class VideoThread(QThread):
                 self.alerts_triggered += 1
                 
             # Draw zones on frames
-            for display_frame in [detection_frame, heatmap_frame]:
-                for z in self.zones:
-                    cv2.rectangle(display_frame, (z[0], z[1]), (z[2], z[3]), (255, 0, 0), 2)
+            if self.zones:
+                for display_frame in [detection_frame, heatmap_frame]:
+                    for z in self.zones:
+                        cv2.rectangle(display_frame, (z[0], z[1]), (z[2], z[3]), (255, 0, 0), 2)
 
             # Add stats text to detection and heatmap frames
             for display_frame in [detection_frame, heatmap_frame]:
@@ -296,7 +290,7 @@ class CrowdCountingApp(QWidget):
         self.logo_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.logo_label.setFixedHeight(100)
         try:
-            logo_pixmap = QPixmap('logo1-white.png')
+            logo_pixmap = QPixmap('CIAA.png')
             if not logo_pixmap.isNull():
                 self.logo_label.setPixmap(logo_pixmap.scaledToHeight(90, Qt.SmoothTransformation))
         except Exception:
@@ -355,8 +349,13 @@ class CrowdCountingApp(QWidget):
         self.ax.set_title('People Count vs Time')
         self.ax.set_xlabel('Time')
         self.ax.set_ylabel('Count')
-        self.time_series_data = []  # List of (timestamp, count)
-        self.max_points = 60  # Show last 60 points (e.g., seconds)
+        self.max_points = 120
+        self.time_series_data = deque(maxlen=self.max_points)
+        self.chart_window_seconds = 10
+        self.chart_update_interval = 0.5
+        self.last_chart_update = 0.0
+        self.thumbnail_stride = 3
+        self.thumbnail_frame_counter = 0
         
         # --- Map Settings ---
         self.map_settings_group = QGroupBox('Map Settings')
@@ -364,12 +363,15 @@ class CrowdCountingApp(QWidget):
         self.lon_input = QLineEdit('-74.0060')
         self.width_input = QLineEdit('100') # Default width in meters
         self.update_map_btn = QPushButton('Update Map')
+        self.detect_location_btn = QPushButton('Detect Live Location')
         self.update_map_btn.clicked.connect(self.update_map_coverage)
+        self.detect_location_btn.clicked.connect(self.detect_live_location)
         
         map_settings_layout = QFormLayout()
         map_settings_layout.addRow('Center Latitude:', self.lat_input)
         map_settings_layout.addRow('Center Longitude:', self.lon_input)
         map_settings_layout.addRow('Area Width (m):', self.width_input)
+        map_settings_layout.addRow(self.detect_location_btn)
         map_settings_layout.addRow(self.update_map_btn)
         self.map_settings_group.setLayout(map_settings_layout)
 
@@ -501,6 +503,7 @@ class CrowdCountingApp(QWidget):
             self.start_video()  # Auto-start after selecting video
 
     def live_mode(self):
+        self.detect_live_location(silent=True)
         # Use custom dialog for source selection
         dialog = LiveSourceDialog(self)
         choice, ok = dialog.get_choice()
@@ -534,6 +537,49 @@ class CrowdCountingApp(QWidget):
                     break
                 else:
                     QMessageBox.warning(self, "Invalid RTSP URL", "Please enter a valid RTSP URL starting with rtsp://")
+
+    def _fetch_location_from_ip(self):
+        endpoints = [
+            ("https://ipapi.co/json/", lambda d: (d.get('latitude'), d.get('longitude'))),
+            ("http://ip-api.com/json/", lambda d: (d.get('lat'), d.get('lon'))),
+        ]
+
+        headers = {
+            'User-Agent': 'HeatCrowd/1.0'
+        }
+
+        for url, parser in endpoints:
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=4) as response:
+                    if response.status != 200:
+                        continue
+                    payload = response.read().decode('utf-8', errors='replace')
+                    data = json.loads(payload)
+                    lat, lon = parser(data)
+                    if lat is None or lon is None:
+                        continue
+                    return float(lat), float(lon)
+            except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+                continue
+
+        return None
+
+    def detect_live_location(self, silent=False):
+        location = self._fetch_location_from_ip()
+        if location is None:
+            if not silent:
+                QMessageBox.warning(self, 'Location Detection Failed', 'Could not detect live location. Please enter latitude and longitude manually.')
+            return False
+
+        lat, lon = location
+        self.lat_input.setText(f'{lat:.6f}')
+        self.lon_input.setText(f'{lon:.6f}')
+        self.stats_label.setText(f'Live location detected: {lat:.6f}, {lon:.6f}')
+
+        if not silent:
+            self.update_map_coverage()
+        return True
 
     def start_video(self):
         if self.video_path is None or self.video_path == '':
@@ -574,6 +620,11 @@ class CrowdCountingApp(QWidget):
         map_path = os.path.abspath('leaflet_map.html')
         self.minimap_view.setUrl(QUrl.fromLocalFile(map_path))
         
+        try:
+            self.minimap_view.loadFinished.disconnect()
+        except TypeError:
+            pass
+
         # Use a lambda to avoid issues with loop variables in closures
         self.minimap_view.loadFinished.connect(
             lambda: self.setup_map_and_start_thread(lat, lon, bounds)
@@ -621,6 +672,8 @@ class CrowdCountingApp(QWidget):
         if self.thread:
             self.thread.stop()
             self.thread = None
+        if self.loading_timer:
+            self.loading_timer.stop()
             
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
@@ -692,10 +745,12 @@ class CrowdCountingApp(QWidget):
             self.loading_shown = False
         # Store all frames
         self.current_frames = [normal_frame, detection_frame, heatmap_frame]
-        # Update thumbnails
-        self.update_thumbnail(self.normal_thumb, normal_frame)
-        self.update_thumbnail(self.detection_thumb, detection_frame)
-        self.update_thumbnail(self.heatmap_thumb, heatmap_frame)
+        # Update thumbnails less frequently to reduce GUI overhead
+        self.thumbnail_frame_counter += 1
+        if self.thumbnail_frame_counter % self.thumbnail_stride == 0:
+            self.update_thumbnail(self.normal_thumb, normal_frame)
+            self.update_thumbnail(self.detection_thumb, detection_frame)
+            self.update_thumbnail(self.heatmap_thumb, heatmap_frame)
         # Update main display based on current mode
         self.update_main_display()
         # Update stats
@@ -712,20 +767,26 @@ class CrowdCountingApp(QWidget):
         # Update time-series chart
         now = datetime.datetime.now()
         self.time_series_data.append((now, count))
-        # Keep only the last 10 seconds
-        self.time_series_data = [(t, c) for t, c in self.time_series_data if (now - t).total_seconds() <= 10]
-        if len(self.time_series_data) == 0:
+        # Keep only the most recent window for plotting
+        cutoff = now - datetime.timedelta(seconds=self.chart_window_seconds)
+        while self.time_series_data and self.time_series_data[0][0] < cutoff:
+            self.time_series_data.popleft()
+
+        if not self.time_series_data:
             return
-        times, counts = zip(*self.time_series_data)
-        time_labels = [t.strftime('%H:%M:%S') for t in times]
-        self.ax.clear()
-        self.ax.plot(time_labels, counts, color='tab:blue', linewidth=2)
-        self.ax.set_title('People Count vs Time (last 10s)')
-        self.ax.set_xlabel('Time')
-        self.ax.set_ylabel('Count')
-        self.ax.tick_params(axis='x', labelrotation=45)
-        self.figure.tight_layout()
-        self.canvas.draw()
+
+        now_ts = time.time()
+        if now_ts - self.last_chart_update >= self.chart_update_interval:
+            times, counts = zip(*self.time_series_data)
+            x_vals = [(t - times[0]).total_seconds() for t in times]
+            self.ax.clear()
+            self.ax.plot(x_vals, counts, color='tab:blue', linewidth=2)
+            self.ax.set_title('People Count vs Time (last 10s)')
+            self.ax.set_xlabel('Seconds')
+            self.ax.set_ylabel('Count')
+            self.figure.tight_layout()
+            self.canvas.draw_idle()
+            self.last_chart_update = now_ts
         # No minimap overlay update needed
 
     def update_thumbnail(self, label, cv_img):

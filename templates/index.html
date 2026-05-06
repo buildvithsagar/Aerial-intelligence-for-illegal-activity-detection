@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CIAA — Crowd Intelligence & Aerial Analytics</title>
+    <meta name="description" content="AI-based aerial intelligence system for predictive crowd management and analytics">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- ========== TOP NAV ========== -->
+    <header class="topbar" id="topbar">
+        <div class="topbar-left">
+            <img src="/static/CIAA.png" alt="CIAA Logo" class="logo" onerror="this.style.display='none'">
+            <div class="brand">
+                <h1>CIAA</h1>
+                <p class="brand-sub">Crowd Intelligence & Aerial Analytics</p>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <div class="chip chip-device" id="deviceChip">
+                <span class="chip-dot"></span>
+                GPU Active
+            </div>
+            <div class="chip chip-clock" id="realtimeClock"></div>
+            <div class="status-badge" id="statusBadge">
+                <span class="status-dot"></span>
+                <span class="status-text">IDLE</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ========== MAIN GRID ========== -->
+    <main class="dashboard">
+        <!-- ===== LEFT: Video + Controls ===== -->
+        <section class="col-main">
+            <!-- Video Player Card -->
+            <div class="card card-video" id="videoCard">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                        <h2>Live Feed</h2>
+                    </div>
+                    <div class="view-switcher">
+                        <button id="thumbNormal" class="view-tab" type="button" data-mode="normal">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                            Normal
+                        </button>
+                        <button id="thumbDetection" class="view-tab selected" type="button" data-mode="detection">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            Detection
+                        </button>
+                        <button id="thumbHeatmap" class="view-tab" type="button" data-mode="heatmap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="7" stroke-dasharray="2 3"/></svg>
+                            Heatmap
+                        </button>
+                    </div>
+                </div>
+                <div id="streamContainer" class="stream-container">
+                    <img id="mainStream" alt="Live video stream">
+                    <canvas id="zoneCanvas"></canvas>
+                    <div class="stream-overlay" id="streamOverlay">
+                        <div class="stream-placeholder">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                            <span>Select a source and press <strong>Start</strong></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats Bar -->
+            <div class="stats-bar">
+                <div class="stat-card" id="statCount">
+                    <div class="stat-icon stat-icon-count">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    </div>
+                    <div class="stat-content">
+                        <span class="stat-label">People Count</span>
+                        <strong id="countValue" class="stat-value">0</strong>
+                    </div>
+                </div>
+                <div class="stat-card" id="statTraffic">
+                    <div class="stat-icon stat-icon-crowd">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                    </div>
+                    <div class="stat-content">
+                        <span class="stat-label">Crowd Density</span>
+                        <strong id="trafficValue" class="stat-value">0.00%</strong>
+                    </div>
+                </div>
+                <div class="stat-card" id="statFps">
+                    <div class="stat-icon stat-icon-fps">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    </div>
+                    <div class="stat-content">
+                        <span class="stat-label">FPS</span>
+                        <strong id="fpsValue" class="stat-value">0.00</strong>
+                    </div>
+                </div>
+                <div class="stat-card" id="statPeak">
+                    <div class="stat-icon stat-icon-peak">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                    </div>
+                    <div class="stat-content">
+                        <span class="stat-label">Peak Density</span>
+                        <strong id="peakValue" class="stat-value">0.00%</strong>
+                    </div>
+                </div>
+                <div class="stat-card stat-card-alert" id="statAlerts">
+                    <div class="stat-icon stat-icon-alerts">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    </div>
+                    <div class="stat-content">
+                        <span class="stat-label">Alerts</span>
+                        <strong id="alertsValue" class="stat-value">0</strong>
+                    </div>
+                </div>
+                <div class="stat-card" id="statZones">
+                    <div class="stat-icon stat-icon-zones">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+                    </div>
+                    <div class="stat-content">
+                        <span class="stat-label">In Zones</span>
+                        <strong id="zoneCountValue" class="stat-value">0</strong>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chart Row -->
+            <div class="chart-row">
+                <div class="card card-chart">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                            <h2>People Count <span class="chart-subtitle">(last 10s)</span></h2>
+                        </div>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="countChart"></canvas>
+                    </div>
+                </div>
+                <div class="card card-chart" id="forecastCard">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                            <h2>Crowd Forecast <span class="chart-subtitle">(next 10 min)</span></h2>
+                        </div>
+                        <div class="forecast-controls">
+                            <select id="forecastMethod">
+                                <option value="hybrid">Hybrid</option>
+                                <option value="fast">Statistical</option>
+                                <option value="lstm">LSTM AI</option>
+                            </select>
+                            <button id="refreshForecast" class="btn-icon" type="button" title="Refresh Forecast">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="forecastLoading" class="chart-loading">
+                        <div class="spinner"></div>
+                        <span>Generating forecast…</span>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="forecastChart"></canvas>
+                    </div>
+                    <p id="forecastMeta" class="chart-meta"></p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== RIGHT: Controls + Map ===== -->
+        <aside class="col-side">
+            <!-- Source Controls Card -->
+            <div class="card card-controls">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        <h2>Controls</h2>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="sourceType">Video Source</label>
+                    <select id="sourceType">
+                        <option value="file">📁 Sample Video</option>
+                        <option value="upload">⬆️ Upload Video</option>
+                        <option value="camera">📷 Webcam</option>
+                        <option value="rtsp">📡 RTSP Stream</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="fileRow">
+                    <label for="videoSelect">Video File</label>
+                    <select id="videoSelect"></select>
+                </div>
+                <div class="form-group hidden" id="uploadRow">
+                    <label for="videoUpload">Upload File</label>
+                    <input id="videoUpload" type="file" accept="video/*">
+                </div>
+                <div class="form-group hidden" id="cameraRow">
+                    <label for="cameraIndex">Camera Index</label>
+                    <input id="cameraIndex" type="number" value="0" min="0" max="5">
+                </div>
+                <div class="form-group hidden" id="rtspRow">
+                    <label for="rtspUrl">RTSP URL</label>
+                    <input id="rtspUrl" type="text" placeholder="rtsp://user:pass@host:554/stream">
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label for="maxPeople">Max People</label>
+                        <input id="maxPeople" type="number" value="350" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="overcrowd">Overcrowd %</label>
+                        <input id="overcrowd" type="number" value="80" min="1" max="100">
+                    </div>
+                </div>
+
+                <div class="toggle-row">
+                    <label class="toggle-label">
+                        <input id="lightMode" type="checkbox">
+                        <span class="toggle-switch"></span>
+                        <span>Light Mode</span>
+                    </label>
+                    <label class="toggle-label">
+                        <input id="zoneEnabled" type="checkbox">
+                        <span class="toggle-switch"></span>
+                        <span>Zone Counting</span>
+                    </label>
+                    <label class="toggle-label">
+                        <input id="forecastToggle" type="checkbox" checked>
+                        <span class="toggle-switch"></span>
+                        <span>Forecasting</span>
+                    </label>
+                </div>
+
+                <div class="btn-group">
+                    <button id="startBtn" class="btn btn-primary">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        Start
+                    </button>
+                    <button id="stopBtn" class="btn btn-danger">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                        Stop
+                    </button>
+                    <button id="clearZonesBtn" class="btn btn-ghost">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+                        Clear Zones
+                    </button>
+                    <button id="resetBtn" class="btn btn-ghost">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                        Reset
+                    </button>
+                </div>
+            </div>
+
+            <!-- Map Card -->
+            <div class="card card-map">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                        <h2>Location</h2>
+                    </div>
+                    <button id="detectLocationBtn" class="btn-icon" type="button" title="Detect GPS Location">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>
+                    </button>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label for="latInput">Latitude</label>
+                        <input id="latInput" value="28.6765">
+                    </div>
+                    <div class="form-group">
+                        <label for="lonInput">Longitude</label>
+                        <input id="lonInput" value="77.5005">
+                    </div>
+                    <div class="form-group">
+                        <label for="widthInput">Width (m)</label>
+                        <input id="widthInput" value="100">
+                    </div>
+                </div>
+                <button id="updateMapBtn" class="btn btn-secondary btn-sm">Update Map</button>
+                <p id="locationMeta" class="meta-text">Click map or drag marker to fine-tune location.</p>
+                <div id="map"></div>
+            </div>
+
+            <!-- Command Bar Card -->
+            <div class="card card-nlp">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        <h2>AI Command Bar</h2>
+                    </div>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label for="nlpProvider">Provider</label>
+                        <select id="nlpProvider">
+                            <option value="fallback">Rule-based (Default)</option>
+                            <option value="openai">OpenAI (GPT)</option>
+                            <option value="gemini">Google Gemini</option>
+                            <option value="ollama">Ollama (Local)</option>
+                        </select>
+                    </div>
+                    <div class="form-group hidden" id="nlpModelGroup">
+                        <label for="nlpModel">Model</label>
+                        <select id="nlpModel">
+                            <option value="">Default Model</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="nlp-input-row">
+                    <input id="nlpInput" type="text" placeholder="Try: &quot;start webcam&quot;, &quot;switch to heatmap&quot;, &quot;show crowd count&quot;…">
+                    <button id="nlpSendBtn" class="btn btn-primary btn-send" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    </button>
+                </div>
+                <p id="nlpReply" class="nlp-reply"></p>
+            </div>
+        </aside>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

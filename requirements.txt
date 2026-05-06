@@ -2,4 +2,15 @@ PyQt5
 opencv-python
 numpy
 ultralytics
-PyQtWebEngine 
+PyQtWebEngine
+flask
+matplotlib
+streamlit
+streamlit-folium
+folium
+pandas
+streamlit-drawable-canvas
+requests
+python-dotenv
+scikit-learn
+tensorflow

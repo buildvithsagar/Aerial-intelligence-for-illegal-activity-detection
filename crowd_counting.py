@@ -2,24 +2,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# Load YOLOv8 model (keeping the yolov8n.pt as requested)
-model = YOLO('yolov8n.pt')
-
-# Define COCO class labels, where 'person' is the first class
-COCO_CLASSES = [
-    'person', 'bicycle', 'car', 'motorbike', 'aeroplane', 'bus', 'train', 'truck',
-    'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
-    'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra',
-    'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-    'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
-    'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup',
-    'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange',
-    'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'sofa',
-    'potted plant', 'bed', 'dining table', 'toilet', 'tv monitor', 'laptop', 'mouse',
-    'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
-    'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
-    'toothbrush'
-]
+# Load YOLOv8 model (keeping the weight as requested)
+model = YOLO('weight')
 
 # Initialize video capture from file or camera
 video_path = 'crowd_video.mp4'  # Replace with 0 for webcam
@@ -32,6 +16,7 @@ IOU_THRESHOLD = 0.6
 
 # Maximum possible crowd count (for ratio calculation)
 MAX_PEOPLE_COUNT = 350  # Set an appropriate value depending on the scenario
+PERSON_CLASS_ID = 0
 
 while True:
     ret, frame = cap.read()
@@ -39,7 +24,7 @@ while True:
         break
 
     # Run YOLOv8 detection on the frame with NMS IoU threshold adjustments
-    results = model(frame, conf=CONFIDENCE_THRESHOLD, iou=IOU_THRESHOLD)
+    results = model(frame, conf=CONFIDENCE_THRESHOLD, iou=IOU_THRESHOLD, verbose=False)
 
     # Extract bounding boxes, class IDs, and confidence scores
     boxes = results[0].boxes.xyxy.cpu().numpy()  # Bounding box coordinates
@@ -47,15 +32,14 @@ while True:
     confidences = results[0].boxes.conf.cpu().numpy()  # Confidence scores
 
     # Count the number of people in the frame
-    current_people_count = sum(1 for i, class_id in enumerate(class_ids)
-                               if COCO_CLASSES[class_id] == 'person' and confidences[i] > CONFIDENCE_THRESHOLD)
+    person_indices = np.flatnonzero((class_ids == PERSON_CLASS_ID) & (confidences > CONFIDENCE_THRESHOLD))
+    current_people_count = int(person_indices.size)
 
     # Calculate the crowd percentage
     crowd_percentage = (current_people_count / MAX_PEOPLE_COUNT) * 100 if MAX_PEOPLE_COUNT > 0 else 0
 
     # Draw bounding boxes for each detected person
-    for i, class_id in enumerate(class_ids):
-        if COCO_CLASSES[class_id] == 'person' and confidences[i] > CONFIDENCE_THRESHOLD:
+    for i in person_indices:
             # Extract the bounding box coordinates
             x1, y1, x2, y2 = map(int, boxes[i])
             # Draw bounding box and label for the person
